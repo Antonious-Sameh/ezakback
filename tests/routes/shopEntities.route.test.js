@@ -1,0 +1,106 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import request from 'supertest';
+
+vi.mock('../../src/config/shops.js', () => ({
+  SHOPS: [{ id: 'shop1', name: 'المحل الأول', apiUrl: 'https://s1.example.com/api', adminKey: 'k1' }],
+  getShopById: (id) => (id === 'shop1' ? { id: 'shop1', name: 'المحل الأول', apiUrl: 'https://s1.example.com/api', adminKey: 'k1' } : null),
+}));
+
+vi.mock('../../src/services/shopClient.service.js', async () => {
+  const actual = await vi.importActual('../../src/services/shopClient.service.js');
+  return { ...actual, fetchFromShop: vi.fn() };
+});
+
+const { fetchFromShop, ShopClientError } = await import('../../src/services/shopClient.service.js');
+const { createApp } = await import('../../src/app.js');
+const { signOwnerToken } = await import('../../src/config/jwt.js');
+
+let token;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  token = signOwnerToken();
+});
+
+describe('GET /api/shops/:shopId/:entity', () => {
+  it('requires authentication', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/products');
+    expect(res.status).toBe(401);
+  });
+
+  it('404s for an unknown shop id', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop99/products').set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('404s for an entity outside the whitelist', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/nonsense').set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(404);
+    expect(fetchFromShop).not.toHaveBeenCalled();
+  });
+
+  it('proxies a valid entity list request with data + pagination', async () => {
+    fetchFromShop.mockResolvedValue({
+      success: true,
+      data: [{ id: '1', name: 'منتج 1' }],
+      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/shops/shop1/products?search=منتج')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.pagination.total).toBe(1);
+    expect(fetchFromShop.mock.calls[0][1]).toBe('/products');
+  });
+});
+
+describe('GET /api/shops/:shopId/:entity/:id', () => {
+  it('proxies a single-item request', async () => {
+    fetchFromShop.mockResolvedValue({ success: true, data: { id: 'abc', name: 'فاتورة' } });
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/sales/abc').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.id).toBe('abc');
+    expect(fetchFromShop.mock.calls[0][1]).toBe('/sales/abc');
+  });
+
+  it('404s for an entity outside the whitelist even with an id', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/nonsense/abc').set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('shop failures surface with the right status, not a hidden generic 500', () => {
+  it('an unreachable shop returns 502 with the friendly ShopClientError message', async () => {
+    fetchFromShop.mockRejectedValue(new ShopClientError('المحل الأول: تعذر الاتصال بالمحل', { shopId: 'shop1' }));
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/products').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(502);
+    expect(res.body.success).toBe(false);
+    expect(res.body.message).toContain('تعذر الاتصال');
+  });
+
+  it('a legitimate 404 from the shop (item not found) passes through as 404, not 502', async () => {
+    fetchFromShop.mockRejectedValue(
+      new ShopClientError('العنصر غير موجود', { shopId: 'shop1', status: 404 }),
+    );
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/products/abc').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body.message).toBe('العنصر غير موجود');
+  });
+});

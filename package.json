@@ -1,0 +1,40 @@
+{
+  "name": "system5-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read-only central reporting backend for System 5 — aggregates data from Shops 1-4's own backends. Owns no shop data itself (no database of products/sales/etc.).",
+  "type": "module",
+  "engines": {
+    "node": ">=18.18.0"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "hash-password": "node scripts/hash-password.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "pino": "^9.4.0",
+    "pino-http": "^10.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.11.1",
+    "@vitest/coverage-v8": "^2.1.9",
+    "eslint": "^9.11.1",
+    "globals": "^15.9.0",
+    "pino-pretty": "^11.2.2",
+    "supertest": "^7.0.0",
+    "vitest": "^2.1.1"
+  }
+}
