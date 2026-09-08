@@ -32,29 +32,47 @@ describe('isAllowedEntity', () => {
 });
 
 describe('getShopEntityList', () => {
-  it('forwards the query as-is and returns data + pagination', async () => {
+  it('reshapes a simple entity (products) and returns data + pagination', async () => {
     fetchFromShop.mockResolvedValue({
       success: true,
-      data: [{ id: '1' }],
+      data: [{ _id: 'p1', name: 'فلتر زيت', code: 'F-1', quantity: 5, minQuantity: 2, salePrice: 50, purchasePrice: 30 }],
       pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
     });
 
-    const result = await getShopEntityList(shop, 'sales', { page: 1, search: 'أحمد', paymentType: 'cash' });
+    const result = await getShopEntityList(shop, 'products', { page: 1, search: 'فلتر' });
 
-    expect(fetchFromShop).toHaveBeenCalledWith(shop, '/sales', {
-      params: { page: 1, search: 'أحمد', paymentType: 'cash' },
+    expect(result.data[0]).toMatchObject({ id: 'p1', name: 'فلتر زيت', sku: 'F-1', stock: 5, status: 'ok' });
+    expect(result.pagination).toEqual({ page: 1, limit: 20, total: 1, totalPages: 1 });
+  });
+
+  it('translates paymentType -> paymentMethod before calling the shop, for sales', async () => {
+    fetchFromShop.mockImplementation((s, path) => {
+      if (path === '/sales') {
+        return Promise.resolve({
+          success: true,
+          data: [{ _id: 's1', invoiceNumber: 'INV-1', customerId: null, total: 100, date: '2026-09-01', items: [] }],
+          pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
+        });
+      }
+      return Promise.resolve({ success: true, data: [] }); // the customer name-lookup call
     });
-    expect(result).toEqual({ data: [{ id: '1' }], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } });
+
+    await getShopEntityList(shop, 'sales', { paymentType: 'cash', page: 1 });
+
+    expect(fetchFromShop).toHaveBeenCalledWith(shop, '/sales', { params: { paymentMethod: 'cash', page: 1 } });
   });
 });
 
 describe('getShopEntityItem', () => {
-  it('fetches the single-item path and returns its data', async () => {
-    fetchFromShop.mockResolvedValue({ success: true, data: { id: 'abc', name: 'منتج' } });
+  it('reshapes a single simple item (products)', async () => {
+    fetchFromShop.mockResolvedValue({
+      success: true,
+      data: { _id: 'abc', name: 'منتج', code: 'X1', quantity: 0, minQuantity: 3, salePrice: 10, purchasePrice: 5 },
+    });
 
     const result = await getShopEntityItem(shop, 'products', 'abc');
 
     expect(fetchFromShop).toHaveBeenCalledWith(shop, '/products/abc');
-    expect(result).toEqual({ id: 'abc', name: 'منتج' });
+    expect(result).toMatchObject({ id: 'abc', name: 'منتج', sku: 'X1', status: 'out' });
   });
 });

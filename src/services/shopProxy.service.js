@@ -1,4 +1,5 @@
 import { fetchFromShop } from './shopClient.service.js';
+import { translateQuery, transformList, transformItem } from './shopEntityTransforms.service.js';
 
 /**
  * The only entities this proxy will forward to a shop's /api/admin/*.
@@ -26,21 +27,19 @@ export function isAllowedEntity(entity) {
 }
 
 /**
- * GET /api/admin/{entity}?... on the given shop, passed through as-is.
- * Deliberately does not re-validate individual filter params here (page,
- * search, status, paymentType, ...) — each shop's own /api/admin/* already
- * validates its own accepted filters per entity (see Shops 1-4's
- * admin.route.js), so re-declaring that same set of rules a second time on
- * this side would just be two places that can drift out of sync. This
- * layer's job is routing and auth, not re-implementing per-entity schemas.
+ * GET /api/admin/{entity}?... on the given shop, then reshaped to match the
+ * frontend's contract — see shopEntityTransforms.service.js for exactly
+ * what changes and why per entity (field renames, computed fields, name
+ * lookups for sales/purchases).
  */
 export async function getShopEntityList(shop, entity, query) {
-  const payload = await fetchFromShop(shop, `/${entity}`, { params: query });
-  return { data: payload.data, pagination: payload.pagination };
+  const payload = await fetchFromShop(shop, `/${entity}`, { params: translateQuery(entity, query) });
+  const data = await transformList(shop, entity, payload.data);
+  return { data, pagination: payload.pagination };
 }
 
-/** GET /api/admin/{entity}/:id on the given shop. */
+/** GET /api/admin/{entity}/:id on the given shop, reshaped the same way as the list. */
 export async function getShopEntityItem(shop, entity, id) {
   const payload = await fetchFromShop(shop, `/${entity}/${id}`);
-  return payload.data;
+  return transformItem(shop, entity, payload.data);
 }

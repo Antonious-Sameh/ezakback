@@ -42,10 +42,10 @@ describe('GET /api/shops/:shopId/:entity', () => {
     expect(fetchFromShop).not.toHaveBeenCalled();
   });
 
-  it('proxies a valid entity list request with data + pagination', async () => {
+  it('proxies a valid entity list request with data + pagination, reshaped for the frontend', async () => {
     fetchFromShop.mockResolvedValue({
       success: true,
-      data: [{ id: '1', name: 'منتج 1' }],
+      data: [{ _id: '1', name: 'منتج 1', code: 'C-1', quantity: 5, minQuantity: 1, salePrice: 10, purchasePrice: 5 }],
       pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
     });
 
@@ -56,20 +56,32 @@ describe('GET /api/shops/:shopId/:entity', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ id: '1', name: 'منتج 1', sku: 'C-1' });
     expect(res.body.pagination.total).toBe(1);
     expect(fetchFromShop.mock.calls[0][1]).toBe('/products');
   });
 });
 
 describe('GET /api/shops/:shopId/:entity/:id', () => {
-  it('proxies a single-item request', async () => {
-    fetchFromShop.mockResolvedValue({ success: true, data: { id: 'abc', name: 'فاتورة' } });
+  it('proxies a single-item request, reshaped for the frontend', async () => {
+    fetchFromShop.mockResolvedValue({
+      success: true,
+      data: {
+        _id: 'abc',
+        invoiceNumber: 'INV-100',
+        customerId: null,
+        total: 250,
+        date: '2026-09-01',
+        paymentMethod: 'cash',
+        items: [],
+      },
+    });
 
     const app = createApp();
     const res = await request(app).get('/api/shops/shop1/sales/abc').set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.data.id).toBe('abc');
+    expect(res.body.data).toMatchObject({ id: 'abc', invoiceNo: 'INV-100', customerName: 'عميل نقدي' });
     expect(fetchFromShop.mock.calls[0][1]).toBe('/sales/abc');
   });
 

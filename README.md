@@ -88,10 +88,13 @@ npm run test:coverage # coverage report (100% on every controller/route/
 ## Connecting the already-built frontend
 
 The frontend's `lib/api.js` reads its backend URL from `VITE_API_BASE_URL`.
-Set that to this backend's deployed URL (including `/api`), e.g.:
+Set that to this backend's deployed URL, **without** an `/api` suffix —
+`lib/api.js` already prefixes every call with `/api` itself
+(`request('/api/auth/login')`, etc.), so adding it here too produces a
+double `/api/api/...` and every request 404s:
 
 ```
-VITE_API_BASE_URL=https://system5-backend.vercel.app/api
+VITE_API_BASE_URL=https://system5-backend.vercel.app
 ```
 
 No frontend code changes should be needed — every endpoint, request shape,
