@@ -116,3 +116,61 @@ describe('shop failures surface with the right status, not a hidden generic 500'
     expect(res.body.message).toBe('العنصر غير موجود');
   });
 });
+
+describe('detail requests for sections the shop has no detail endpoint for', () => {
+  it.each(['activity', 'cashbox', 'expenses'])(
+    '%s/:id answers 404 with a clear message, without calling the shop',
+    async (entity) => {
+      const app = createApp();
+      const res = await request(app).get(`/api/shops/shop1/${entity}/abc`).set('Authorization', `Bearer ${token}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.message).toContain('التفاصيل غير متاحة');
+      expect(fetchFromShop).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['products', 'customers', 'suppliers', 'sales', 'purchases'])('%s/:id is still forwarded', async (entity) => {
+    fetchFromShop.mockResolvedValue({ success: true, data: { _id: 'abc', name: 'x', items: [] } });
+
+    const app = createApp();
+    const res = await request(app).get(`/api/shops/shop1/${entity}/abc`).set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(fetchFromShop.mock.calls.some(([, path]) => path === `/${entity}/abc`)).toBe(true);
+  });
+});
+
+
+describe('GET /api/shops/:shopId/:entity/export', () => {
+  it('returns every matching row with total / truncated / maxRows', async () => {
+    fetchFromShop.mockResolvedValue({
+      success: true,
+      data: [{ _id: 'e1', reason: 'إيجار', amount: 50, date: '2026-09-01' }],
+      pagination: { page: 1, totalPages: 1, total: 1 },
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/expenses/export?from=2026-09-01').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, total: 1, truncated: false, maxRows: 3000 });
+    expect(res.body.data[0]).toMatchObject({ id: 'e1', category: 'إيجار' });
+  });
+
+  it('is not mistaken for a detail request (export is not an id)', async () => {
+    fetchFromShop.mockResolvedValue({ success: true, data: [], pagination: { totalPages: 1, total: 0 } });
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/activity/export').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200); // activity has no detail endpoint → would be 404 if routed as an item
+    expect(fetchFromShop.mock.calls[0][1]).toBe('/activity');
+  });
+
+  it('rejects unknown sections and requires auth', async () => {
+    const app = createApp();
+    expect((await request(app).get('/api/shops/shop1/secrets/export').set('Authorization', `Bearer ${token}`)).status).toBe(404);
+    expect((await request(app).get('/api/shops/shop1/sales/export')).status).toBe(401);
+  });
+});

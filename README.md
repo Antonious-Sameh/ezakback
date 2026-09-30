@@ -135,7 +135,10 @@ All under `/api`, all requiring `Authorization: Bearer <owner token>` except
 | `GET /shops/:shopId/expenses/summary` | That shop's expense totals |
 | `GET /shops/:shopId/reports/:type` | `type` ∈ sales / purchases / profit / inventory / customers / suppliers |
 | `GET /shops/:shopId/:entity` | `entity` ∈ products / customers / suppliers / sales / purchases / cashbox / expenses / activity — paginated list |
-| `GET /shops/:shopId/:entity/:id` | Single item detail |
+| `GET /shops/:shopId/settings` | Shop name/phone/address/invoice footer (whitelisted) — invoice header |
+| `GET /shops/:shopId/expenses/reasons` | Distinct expense reasons for the filter; `supported:false` if the shop isn't patched yet |
+| `GET /shops/:shopId/:entity/export` | Every row matching the list filters (paged through the shop 100 at a time, capped at 3,000) → `{ data, total, truncated, maxRows }` for CSV/Excel |
+| `GET /shops/:shopId/:entity/:id` | Single item detail — only `products / customers / suppliers / sales / purchases` (the shops have no by-id route for the others; they 404 here without calling the shop) |
 
 Every route above is `GET`-only, by construction — there is no write route
 anywhere in this codebase, matching the "System 5 is read-only" requirement

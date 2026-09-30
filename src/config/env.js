@@ -1,5 +1,11 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import { z } from 'zod';
+
+// Tests must never read the developer's real .env: it holds the live shops'
+// URLs + read keys, so a test could silently hit a real shop, and any test
+// that clears SHOP* vars and re-imports config (vi.resetModules) would get
+// them re-loaded from disk. Tests set everything they need in tests/setup.js.
+if (process.env.NODE_ENV !== 'test') dotenv.config();
 
 /**
  * Stage 1-2 scope: server boot, health check, and the raw connection

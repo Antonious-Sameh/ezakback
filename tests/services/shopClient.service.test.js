@@ -56,7 +56,9 @@ describe('fetchFromShop', () => {
       name: 'ShopClientError',
       shopId: 'shop1',
       status: 401,
-      message: 'غير مصرح',
+      // The shop's own wording about admin keys means nothing to the owner:
+      // name the shop and say what's wrong in plain terms.
+      message: 'المحل الأول: تعذر التحقق من مفتاح الربط مع المحل',
       // 401/403 from the shop means OUR key was rejected — a System 5
       // misconfiguration, never surfaced as 401 (would look like the
       // caller's own System 5 session expired).
@@ -150,4 +152,41 @@ describe('fetchFromAllShops', () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('shop error messages (Shops 1-4 nest them under error.message)', () => {
+  function failWith(body, status) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(body, { ok: false, status })));
+  }
+
+  it("reads the shop's nested error.message instead of falling back to a generic text", async () => {
+    failWith({ success: false, error: { message: 'الفاتورة غير موجودة' } }, 404);
+    await expect(fetchFromShop(shop, '/sales/x')).rejects.toMatchObject({ statusCode: 404, message: 'الفاتورة غير موجودة' });
+  });
+
+  it('still accepts the flat { message } shape', async () => {
+    failWith({ success: false, message: 'قيمة غير صالحة' }, 400);
+    await expect(fetchFromShop(shop, '/products')).rejects.toMatchObject({ message: 'قيمة غير صالحة' });
+  });
+
+  it('uses the generic fallback only when the shop sent no message at all', async () => {
+    failWith(null, 404);
+    await expect(fetchFromShop(shop, '/x')).rejects.toMatchObject({ message: 'المحل الأول: رجع خطأ من الخادم' });
+  });
+
+  it('turns a 429 into a clear "too many requests" message, kept as 429 (not a login problem)', async () => {
+    failWith({ success: false, error: { message: 'Too many requests' } }, 429);
+    await expect(fetchFromShop(shop, '/sales')).rejects.toMatchObject({
+      statusCode: 429,
+      message: 'المحل الأول: طلبات كتير على المحل في وقت قصير، حاول تاني بعد دقيقة',
+    });
+  });
+
+  it("names the shop on a server error and keeps the shop's own explanation", async () => {
+    failWith({ success: false, error: { message: 'الوصول المركزي للقراءة غير مُفعّل على هذا النظام' } }, 503);
+    await expect(fetchFromShop(shop, '/sales')).rejects.toMatchObject({
+      statusCode: 502,
+      message: 'المحل الأول: الوصول المركزي للقراءة غير مُفعّل على هذا النظام',
+    });
+  });
 });

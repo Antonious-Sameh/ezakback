@@ -33,6 +33,8 @@ router.get('/', shopsController.list);
 router.get('/:shopId/overview', resolveShop, shopDetailsController.overview);
 router.get('/:shopId/cashbox/summary', resolveShop, shopDetailsController.cashboxSummary);
 router.get('/:shopId/expenses/summary', resolveShop, shopDetailsController.expensesSummary);
+router.get('/:shopId/expenses/reasons', resolveShop, shopDetailsController.expenseReasons);
+router.get('/:shopId/settings', resolveShop, shopDetailsController.settings);
 router.get(
   '/:shopId/reports/:type',
   resolveShop,
@@ -50,6 +52,13 @@ router.get(
   resolveShop,
   validateQuery(shopEntitiesController.entityListQuerySchema),
   shopEntitiesController.list,
+);
+// Must stay ABOVE /:shopId/:entity/:id, or "export" would be read as an id.
+router.get(
+  '/:shopId/:entity/export',
+  resolveShop,
+  validateQuery(shopEntitiesController.entityListQuerySchema),
+  shopEntitiesController.exportList,
 );
 router.get('/:shopId/:entity/:id', resolveShop, shopEntitiesController.item);
 

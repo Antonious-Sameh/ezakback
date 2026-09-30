@@ -30,6 +30,8 @@ function round2(n) {
 // the data, not a mismatched param).
 const QUERY_PARAM_ALIASES = {
   sales: { paymentType: 'paymentMethod' },
+  // Purchases have the same cash/credit filter on the shop side.
+  purchases: { paymentType: 'paymentMethod' },
   products: { status: 'filter' },
   expenses: { category: 'reason' },
 };
@@ -85,6 +87,8 @@ function transformProduct(p) {
     lowStockThreshold: p.minQuantity,
     status: productStatus(p.quantity, p.minQuantity),
     notes: p.notes,
+    // Cloudinary URL uploaded from the shop's own inventory screen (or null).
+    image: p.image || null,
     createdAt: p.createdAt,
     // Not in Shops 1-4's Product model — see back/README.md "Known gaps".
     category: null,
@@ -102,7 +106,9 @@ function transformCustomer(c) {
     address: c.address,
     totalOrders: c.totals?.count ?? 0,
     totalSpent: c.totals?.total ?? 0,
+    totalPaid: c.totals?.paid ?? 0,
     balance: c.totals?.remaining ?? 0,
+    lastPurchase: c.totals?.lastPurchase ?? null,
     createdAt: c.createdAt,
     email: undefined, // Customer model has no email field
   };
@@ -116,7 +122,9 @@ function transformSupplier(s) {
     address: s.address,
     totalPurchases: s.totals?.count ?? 0,
     totalAmount: s.totals?.total ?? 0,
+    totalPaid: s.totals?.paid ?? 0,
     balance: s.totals?.remaining ?? 0,
+    lastPurchase: s.totals?.lastPurchase ?? null,
     createdAt: s.createdAt,
     contactPerson: undefined, // Supplier model has no separate contact field
     email: undefined,
@@ -125,26 +133,85 @@ function transformSupplier(s) {
 
 // ── Sales / Purchases ────────────────────────────────────────────────────
 // Sale/Purchase only store customerId/supplierId (no name) — resolving a
-// human-readable name needs a lookup. For a LIST, one batched fetch of up
-// to 100 customers/suppliers covers realistic shop sizes in a single extra
-// call (not one call per row). For a single DETAIL item, a direct by-id
-// fetch is exact and just as cheap. A name outside that batch, or a lookup
-// that fails, falls back to a generic label rather than blocking the page.
-async function buildNameLookup(shop, entity) {
+// human-readable name needs a lookup against the shop's customers/suppliers.
+//
+// A list page resolves names from one directory per shop + entity, built by
+// paging through the shop's /customers (or /suppliers) at the shop's max
+// page size, and cached for LOOKUP_TTL_MS. Before this cache, EVERY sales or
+// purchases page (every page flip, every filter change) cost an extra call
+// to the shop — which counts against the shop's /api/admin rate limit — and
+// only the first 100 people were ever searched, so any later customer
+// showed as the generic "عميل مسجّل". Capped at LOOKUP_MAX_PAGES so a
+// pathological shop can't turn one page view into dozens of calls.
+//
+// The cache lives in this server instance's memory only (nothing persisted,
+// nothing shared between shops). A name missing from a fresh directory
+// falls back to a generic label rather than blocking the page.
+export const LOOKUP_TTL_MS = 5 * 60 * 1000;
+export const LOOKUP_PAGE_SIZE = 100; // the shops' own max page size
+export const LOOKUP_MAX_PAGES = 10; // → up to 1,000 people per shop
+
+const lookupCache = new Map(); // `${shopId}:${entity}` → { at, promise }
+
+/** Test/ops hook: forget every cached directory. */
+export function clearNameLookupCache() {
+  lookupCache.clear();
+}
+
+async function fetchDirectory(shop, entity) {
   const map = new Map();
-  const payload = await fetchFromShop(shop, `/${entity}`, { params: { limit: 100 } }).catch(() => null);
-  for (const person of payload?.data || []) map.set(person._id, person.name);
+  for (let page = 1; page <= LOOKUP_MAX_PAGES; page += 1) {
+    // Pages are fetched one after another on purpose (stop as soon as the last one arrives).
+    const payload = await fetchFromShop(shop, `/${entity}`, { params: { page, limit: LOOKUP_PAGE_SIZE } });
+    for (const person of payload?.data || []) map.set(String(person._id), person.name);
+    const totalPages = payload?.pagination?.totalPages ?? 1;
+    if (page >= totalPages) break;
+  }
   return map;
+}
+
+async function getNameDirectory(shop, entity) {
+  const key = `${shop.id}:${entity}`;
+  const cached = lookupCache.get(key);
+  if (cached && Date.now() - cached.at < LOOKUP_TTL_MS) return cached.promise;
+
+  // Cache the in-flight promise so concurrent requests share one fetch.
+  const promise = fetchDirectory(shop, entity).catch(() => {
+    lookupCache.delete(key); // don't cache a failure — try again next time
+    return new Map();
+  });
+  lookupCache.set(key, { at: Date.now(), promise });
+  return promise;
 }
 
 async function resolveOneName(shop, entity, id) {
   if (!id) return null;
+  const directory = await getNameDirectory(shop, entity);
+  const known = directory.get(String(id));
+  if (known) return known;
+  // Not in the (possibly stale) directory — e.g. created in the last few
+  // minutes. One direct by-id call is exact and cheap for a single item.
   const payload = await fetchFromShop(shop, `/${entity}/${id}`).catch(() => null);
   return payload?.data?.name ?? null;
 }
 
+// Pure payment state, from the shop's own paid/remaining snapshot.
+function paymentStatus(total, paid, remaining) {
+  if (remaining === undefined || remaining === null) return null;
+  if (remaining <= 0) return 'paid';
+  if ((paid ?? 0) > 0) return 'partial';
+  return total > 0 ? 'unpaid' : 'paid';
+}
+
 function transformSaleItem(it) {
-  return { productName: it.name, qty: it.quantity, price: it.price, cost: it.cost, total: round2(it.price * it.quantity) };
+  return {
+    productName: it.name,
+    code: it.code || undefined,
+    qty: it.quantity,
+    price: it.price,
+    cost: it.cost,
+    total: round2(it.price * it.quantity),
+  };
 }
 
 function transformSale(sale, customerName) {
@@ -153,20 +220,34 @@ function transformSale(sale, customerName) {
     invoiceNo: sale.invoiceNumber,
     customerName: customerName || (sale.customerId ? 'عميل مسجّل' : 'عميل نقدي'),
     date: sale.date,
+    // Sale stores subtotal (before discount), a flat invoice discount, the
+    // final total, and what was paid / is still owed. Older invoices saved
+    // before discounts existed have no subtotal → subtotal === total.
+    subtotal: sale.subtotal ?? sale.total,
+    discount: sale.discount ?? 0,
     total: sale.total,
-    subtotal: sale.total, // no separate subtotal/discount/tax concept in this system
+    paid: sale.paid,
+    remaining: sale.remaining,
+    paymentStatus: paymentStatus(sale.total, sale.paid, sale.remaining),
+    profit: sale.profit,
     paymentType: sale.paymentMethod,
     status: 'completed', // no draft/returned workflow exists on Sale
     items: (sale.items || []).map(transformSaleItem),
     createdAt: sale.createdAt,
     cashier: undefined, // single shared shop login — no per-sale attribution
-    discount: undefined,
-    tax: undefined,
+    tax: undefined, // no tax concept in this business
   };
 }
 
 function transformPurchaseItem(it) {
-  return { productName: it.name, qty: it.quantity, price: it.price, cost: it.price, total: round2(it.price * it.quantity) };
+  return {
+    productName: it.name,
+    code: it.code || undefined,
+    qty: it.quantity,
+    price: it.price,
+    cost: it.price,
+    total: round2(it.price * it.quantity),
+  };
 }
 
 function transformPurchase(purchase, supplierName) {
@@ -175,8 +256,14 @@ function transformPurchase(purchase, supplierName) {
     invoiceNo: purchase.purchaseNumber,
     supplierName: supplierName || 'مورد مسجّل',
     date: purchase.date,
+    subtotal: purchase.subtotal ?? purchase.total,
+    discount: purchase.discount ?? 0,
     total: purchase.total,
-    subtotal: purchase.total,
+    paid: purchase.paid,
+    remaining: purchase.remaining,
+    paymentStatus: paymentStatus(purchase.total, purchase.paid, purchase.remaining),
+    paymentType: purchase.paymentMethod,
+    notes: purchase.notes || undefined,
     status: 'received', // no pending workflow exists on Purchase
     items: (purchase.items || []).map(transformPurchaseItem),
     createdAt: purchase.createdAt,
@@ -205,9 +292,27 @@ function transformCashboxTx(t) {
     date: t.date,
     category: t.reason,
     description: t.notes || t.reason,
+    notes: t.notes || undefined,
+    // What created this movement: sale / purchase / expense / manual /
+    // customer_payment / ... (the shop's CASHBOX_REF_TYPES).
+    source: t.refType || 'manual',
     createdAt: t.createdAt,
-    method: undefined,
+    method: undefined, // no payment-method concept on a cashbox movement
   };
+}
+
+// Activity entries of type 'sale'/'purchase' carry refId = the invoice they
+// were written for — EXCEPT return entries, which share the same type but
+// point at the return document (see the shops' salesReturn/purchaseReturn
+// services), which has no admin endpoint. The shops write those with a
+// fixed description ("تم تسجيل مرتجع ..."), so that's how they're told apart.
+const ACTIVITY_INVOICE_ENTITY = { sale: 'sales', purchase: 'purchases' };
+
+function activityRef(a) {
+  const entity = ACTIVITY_INVOICE_ENTITY[a.type];
+  if (!entity || !a.refId) return null;
+  if (typeof a.description === 'string' && a.description.includes('مرتجع')) return null;
+  return { entity, id: String(a.refId) };
 }
 
 function transformActivity(a) {
@@ -215,6 +320,8 @@ function transformActivity(a) {
     id: a._id,
     type: a.type,
     description: a.description,
+    amount: a.amount || undefined, // 0 = "no amount" for non-money activities
+    ref: activityRef(a),
     date: a.date,
     createdAt: a.createdAt,
     user: undefined, // single shared shop login — no per-action attribution
@@ -234,12 +341,16 @@ const SIMPLE_TRANSFORMS = {
 /** Transforms an already-fetched list payload's `data` array in place (returns a new array). */
 export async function transformList(shop, entity, rawItems) {
   if (entity === 'sales') {
-    const names = await buildNameLookup(shop, 'customers');
-    return rawItems.map((sale) => transformSale(sale, sale.customerId ? names.get(sale.customerId) : null));
+    // Skip the lookup entirely when every row is a walk-in (cash) customer.
+    const needsNames = rawItems.some((sale) => sale.customerId);
+    const names = needsNames ? await getNameDirectory(shop, 'customers') : new Map();
+    return rawItems.map((sale) =>
+      transformSale(sale, sale.customerId ? names.get(String(sale.customerId)) : null),
+    );
   }
   if (entity === 'purchases') {
-    const names = await buildNameLookup(shop, 'suppliers');
-    return rawItems.map((purchase) => transformPurchase(purchase, names.get(purchase.supplierId)));
+    const names = rawItems.length ? await getNameDirectory(shop, 'suppliers') : new Map();
+    return rawItems.map((purchase) => transformPurchase(purchase, names.get(String(purchase.supplierId))));
   }
   const transform = SIMPLE_TRANSFORMS[entity];
   return transform ? rawItems.map(transform) : rawItems;

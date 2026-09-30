@@ -41,6 +41,36 @@ export class ShopClientError extends Error {
 }
 
 /**
+ * Shops 1-4 send errors as `{ success: false, error: { message } }` (nested),
+ * not System 5's own flat `{ message }` — reading only `payload.message`
+ * meant every real shop error (e.g. "الفاتورة غير موجودة") was replaced by
+ * the generic fallback. Both shapes are accepted here.
+ */
+export function extractShopMessage(payload) {
+  const nested = payload?.error?.message;
+  if (typeof nested === 'string' && nested.trim()) return nested.trim();
+  const flat = payload?.message;
+  if (typeof flat === 'string' && flat.trim()) return flat.trim();
+  return null;
+}
+
+/**
+ * The message the OWNER will read. Problems that are about the connection
+ * between System 5 and the shop (key rejected, shop broken, rate limited)
+ * always name the shop — the owner is looking at four shops and needs to
+ * know which one — and never echo the shop's internal wording about "admin
+ * keys", which means nothing to them. A shop's answer about this specific
+ * request (400 bad filter, 404 not found) is passed through as-is.
+ */
+export function shopErrorMessage(shop, status, payload) {
+  const shopMessage = extractShopMessage(payload);
+  if (status === 401 || status === 403) return `${shop.name}: تعذر التحقق من مفتاح الربط مع المحل`;
+  if (status === 429) return `${shop.name}: طلبات كتير على المحل في وقت قصير، حاول تاني بعد دقيقة`;
+  if (status >= 500) return `${shop.name}: ${shopMessage || 'حصل خطأ في خادم المحل'}`;
+  return shopMessage || `${shop.name}: رجع خطأ من الخادم`;
+}
+
+/**
  * Builds a query string from a plain params object. Skips undefined, null,
  * empty-string, and the sentinel value 'all' (the shops' own list endpoints
  * treat an omitted filter and filter=all the same way, so there's no reason
@@ -96,7 +126,7 @@ export async function fetchFromShop(shop, path, { params, timeoutMs = env.SHOP_R
   }
 
   if (!response.ok || payload?.success === false) {
-    throw new ShopClientError(payload?.message || `${shop.name}: رجع خطأ من الخادم`, {
+    throw new ShopClientError(shopErrorMessage(shop, response.status, payload), {
       shopId: shop.id,
       status: response.status,
     });

@@ -79,3 +79,81 @@ describe('GET /api/shops/:shopId/expenses/summary', () => {
     expect(res.body.data.monthTotal).toBe(900);
   });
 });
+
+function shopError(message, status) {
+  const err = new Error(message);
+  err.name = 'ShopClientError';
+  err.status = status;
+  err.statusCode = status >= 500 ? 502 : status;
+  err.isOperational = true;
+  return err;
+}
+
+describe('GET /api/shops/:shopId/settings', () => {
+  it('requires authentication', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/settings');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns ONLY the whitelisted invoice-header fields', async () => {
+    fetchFromShop.mockResolvedValue({
+      success: true,
+      data: {
+        _id: 'x', singletonKey: 'main', shopName: ' محل النور ', ownerName: 'بيشوي', phone: '0100', address: 'ملوي',
+        invoiceFooter: 'شكراً لزيارتكم', lowStockThreshold: 5, accessCode: 'SECRET', updatedAt: '2026-09-01',
+      },
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/settings').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      shopName: 'محل النور', ownerName: 'بيشوي', phone: '0100', address: 'ملوي', invoiceFooter: 'شكراً لزيارتكم',
+    });
+    expect(JSON.stringify(res.body)).not.toContain('SECRET');
+    expect(fetchFromShop).toHaveBeenCalledWith(expect.objectContaining({ id: 'shop1' }), '/settings');
+  });
+
+  it("falls back to System 5's configured shop name and empty strings", async () => {
+    fetchFromShop.mockResolvedValue({ success: true, data: { shopName: '', phone: null } });
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/settings').set('Authorization', `Bearer ${token}`);
+
+    expect(res.body.data).toEqual({ shopName: 'المحل الأول', ownerName: '', phone: '', address: '', invoiceFooter: '' });
+  });
+});
+
+describe('GET /api/shops/:shopId/expenses/reasons', () => {
+  it('returns the real distinct reasons from the shop', async () => {
+    fetchFromShop.mockResolvedValue({ success: true, data: ['إيجار', '', 'كهرباء'] });
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/expenses/reasons').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: ['إيجار', 'كهرباء'], supported: true });
+    expect(fetchFromShop.mock.calls[0][1]).toBe('/expenses/reasons');
+  });
+
+  it('reports supported:false (not an error) when the shop has not been patched yet', async () => {
+    fetchFromShop.mockRejectedValue(shopError('المسار غير موجود', 404));
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/expenses/reasons').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: [], supported: false });
+  });
+
+  it('still reports a real failure (shop down) as an error', async () => {
+    fetchFromShop.mockRejectedValue(shopError('المحل الأول: تعذر الاتصال بالمحل', 500));
+
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/expenses/reasons').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(502);
+  });
+});

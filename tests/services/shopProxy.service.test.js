@@ -76,3 +76,83 @@ describe('getShopEntityItem', () => {
     expect(result).toMatchObject({ id: 'abc', name: 'منتج', sku: 'X1', status: 'out' });
   });
 });
+
+describe('DETAIL_ENTITIES', () => {
+  it('matches the shops\' real by-id admin routes (no cashbox / expenses / activity)', async () => {
+    const { DETAIL_ENTITIES, hasDetailEndpoint } = await import('../../src/services/shopProxy.service.js');
+    expect(DETAIL_ENTITIES).toEqual(['products', 'customers', 'suppliers', 'sales', 'purchases']);
+    expect(hasDetailEndpoint('activity')).toBe(false);
+    expect(hasDetailEndpoint('cashbox')).toBe(false);
+    expect(hasDetailEndpoint('expenses')).toBe(false);
+    expect(hasDetailEndpoint('sales')).toBe(true);
+  });
+});
+
+
+describe('exportShopEntityList', () => {
+  async function load() {
+    const mod = await import('../../src/services/shopProxy.service.js');
+    const transforms = await import('../../src/services/shopEntityTransforms.service.js');
+    transforms.clearNameLookupCache();
+    fetchFromShop.mockReset(); // drop any queued mockResolvedValueOnce from earlier tests
+    return mod;
+  }
+  const page = (rows, p, totalPages, total) => ({ success: true, data: rows, pagination: { page: p, totalPages, total } });
+  const expenses = (n, offset = 0) =>
+    Array.from({ length: n }, (_, i) => ({ _id: `e${offset + i}`, reason: 'إيجار', amount: 10, date: '2026-09-01' }));
+
+  it('pages through ALL matching rows at 100 per page, keeping the filters and dropping page/limit', async () => {
+    const { exportShopEntityList } = await load();
+    fetchFromShop
+      .mockResolvedValueOnce(page(expenses(100), 1, 3, 230))
+      .mockResolvedValueOnce(page(expenses(100, 100), 2, 3, 230))
+      .mockResolvedValueOnce(page(expenses(30, 200), 3, 3, 230));
+
+    const result = await exportShopEntityList(shop, 'expenses', { page: 7, limit: 20, category: 'إيجار', from: '2026-09-01' });
+
+    expect(fetchFromShop).toHaveBeenCalledTimes(3);
+    expect(fetchFromShop.mock.calls[0][2]).toEqual({ params: { reason: 'إيجار', from: '2026-09-01', page: 1, limit: 100 } });
+    expect(fetchFromShop.mock.calls[2][2].params.page).toBe(3);
+    expect(result.data).toHaveLength(230);
+    expect(result.data[0]).toMatchObject({ id: 'e0', category: 'إيجار', amount: 10 });
+    expect(result).toMatchObject({ total: 230, truncated: false });
+  });
+
+  it('stops at EXPORT_MAX_ROWS and reports truncated', async () => {
+    const { exportShopEntityList, EXPORT_MAX_ROWS, EXPORT_PAGE_SIZE } = await load();
+    const pages = EXPORT_MAX_ROWS / EXPORT_PAGE_SIZE;
+    for (let p = 1; p <= pages + 5; p += 1) {
+      fetchFromShop.mockResolvedValueOnce(page(expenses(100, (p - 1) * 100), p, 99, 9900));
+    }
+
+    const result = await exportShopEntityList(shop, 'expenses', {});
+
+    expect(fetchFromShop).toHaveBeenCalledTimes(pages);
+    expect(result.data).toHaveLength(EXPORT_MAX_ROWS);
+    expect(result).toMatchObject({ total: 9900, truncated: true });
+  });
+
+  it('stops on an empty page even if the shop claims more pages', async () => {
+    const { exportShopEntityList } = await load();
+    fetchFromShop.mockResolvedValueOnce(page(expenses(5), 1, 10, 5)).mockResolvedValueOnce(page([], 2, 10, 5));
+
+    const result = await exportShopEntityList(shop, 'expenses', {});
+
+    expect(fetchFromShop).toHaveBeenCalledTimes(2);
+    expect(result.data).toHaveLength(5);
+  });
+
+  it('resolves customer names for sales with ONE directory lookup for the whole export', async () => {
+    const { exportShopEntityList } = await load();
+    const sale = (i) => ({ _id: `s${i}`, invoiceNumber: `INV-${i}`, customerId: 'c1', total: 10, items: [] });
+    fetchFromShop
+      .mockResolvedValueOnce(page([sale(1), sale(2)], 1, 2, 3))
+      .mockResolvedValueOnce(page([sale(3)], 2, 2, 3))
+      .mockResolvedValueOnce({ success: true, data: [{ _id: 'c1', name: 'أحمد' }], pagination: { totalPages: 1 } });
+
+    const result = await exportShopEntityList(shop, 'sales', {});
+
+    expect(fetchFromShop).toHaveBeenCalledTimes(3);
+    expect(result.data.map((r) => r.customerName)).toEqual(['أحمد', 'أحمد', 'أحمد']);
+  });
+});
