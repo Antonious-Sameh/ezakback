@@ -1,34 +1,118 @@
 import { SHOPS } from '../config/shops.js';
 import { fetchFromShop } from './shopClient.service.js';
+import { salesNet, profitNet, profitRevenue, salesCount, marginPct, n } from './shopReportFields.js';
+import { previousRange, pctChange } from '../utils/dateRanges.js';
 
 /**
- * One shop's row in the comparison — sales and profit for the given range.
- * Never rejects: a shop that fails either call contributes 0 for that
- * figure rather than breaking the whole comparison (same reasoning as
- * shopSummary.service.js — one bad shop shouldn't blank the other three).
+ * The owner's home-page analytics: all four shops over a date range,
+ * compared with the previous period of the same length.
+ *
+ * Per shop (in parallel, each call allowed to fail on its own):
+ *   sales + profit for the range, sales + profit for the previous range,
+ *   what customers still owe (all-time), and the day-by-day series.
+ * A shop that doesn't answer is flagged `available: false` and counts as 0 —
+ * one bad shop never blanks the other three.
  */
-async function getShopCompare(shop, range) {
-  const [salesResult, profitResult] = await Promise.allSettled([
-    fetchFromShop(shop, '/reports/sales', { params: range }),
-    fetchFromShop(shop, '/reports/profit', { params: range }),
+
+const settled = (p) => p.then((r) => r, () => null);
+const round2 = (v) => Math.round(v * 100) / 100;
+
+async function getShopCompare(shop, range, prev) {
+  const [sales, profit, prevSales, prevProfit, customers, daily] = await Promise.all([
+    settled(fetchFromShop(shop, '/reports/sales', { params: range })),
+    settled(fetchFromShop(shop, '/reports/profit', { params: range })),
+    settled(fetchFromShop(shop, '/reports/sales', { params: prev })),
+    settled(fetchFromShop(shop, '/reports/profit', { params: prev })),
+    settled(fetchFromShop(shop, '/reports/customers', { params: { limit: 1 } })),
+    // Needs shop patch 2 — absent on an older shop build, which is fine.
+    settled(fetchFromShop(shop, '/reports/daily', { params: range })),
   ]);
+
+  const salesValue = sales ? salesNet(sales.data) : 0;
+  const profitValue = profit ? profitNet(profit.data) : 0;
+  const prevSalesValue = prevSales ? salesNet(prevSales.data) : 0;
+  const prevProfitValue = prevProfit ? profitNet(prevProfit.data) : 0;
+  const hasPrevious = Boolean(prevSales && prevProfit);
 
   return {
     shopId: shop.id,
     shopName: shop.name,
-    sales: salesResult.status === 'fulfilled' ? salesResult.value.data.revenue : 0,
-    // "net" (revenue - cost of goods - expenses) is the shop's own bottom
-    // line for the period — see Shops 1-4's reports.service.js getProfitReport.
-    profit: profitResult.status === 'fulfilled' ? profitResult.value.data.net : 0,
+    // Sales after returns — the same basis as the profit figure next to it.
+    sales: salesValue,
+    // "net" (revenue - cost of goods - expenses) is the shop's own bottom line.
+    profit: profitValue,
+    invoices: sales ? salesCount(sales.data) : 0,
+    margin: profit ? marginPct(profitValue, profitRevenue(profit.data)) : 0,
+    // false = this shop didn't answer; its zeros are "unknown", not "no sales".
+    available: Boolean(sales && profit),
+    previous: hasPrevious ? { sales: prevSalesValue, profit: prevProfitValue } : null,
+    change: hasPrevious
+      ? { sales: pctChange(salesValue, prevSalesValue), profit: pctChange(profitValue, prevProfitValue) }
+      : { sales: null, profit: null },
+    // What this shop's customers still owe it (all-time, not range-bound).
+    outstanding: customers ? n(customers.data?.totalOutstanding) : 0,
+    _daily: daily?.data?.days || null,
   };
 }
 
-/** Totals + a per-shop breakdown for the requested date range. */
+/** Sums the shops' day series by date (only shops that have the daily report). */
+function combineDaily(shops) {
+  const withDaily = shops.filter((s) => Array.isArray(s._daily));
+  const byDate = new Map();
+  for (const s of withDaily) {
+    for (const d of s._daily) {
+      const cur = byDate.get(d.date) || { date: d.date, sales: 0, profit: 0 };
+      cur.sales = round2(cur.sales + n(d.netSales));
+      cur.profit = round2(cur.profit + n(d.net));
+      byDate.set(d.date, cur);
+    }
+  }
+  return {
+    available: withDaily.length > 0,
+    // true = some shops aren't in the series (not updated / not answering).
+    partial: withDaily.length > 0 && withDaily.length < shops.length,
+    shopsIncluded: withDaily.length,
+    days: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
+  };
+}
+
 export async function getCompareReport(range) {
-  const byShop = await Promise.all(SHOPS.map((shop) => getShopCompare(shop, range)));
+  const prev = previousRange(range);
+  const shops = await Promise.all(SHOPS.map((shop) => getShopCompare(shop, range, prev)));
 
-  const totalSales = byShop.reduce((sum, s) => sum + s.sales, 0);
-  const totalProfit = byShop.reduce((sum, s) => sum + s.profit, 0);
+  const sum = (pick) => round2(shops.reduce((acc, s) => acc + pick(s), 0));
+  const totalSales = sum((s) => s.sales);
+  const totalProfit = sum((s) => s.profit);
+  const totalInvoices = shops.reduce((acc, s) => acc + s.invoices, 0);
+  const prevSales = sum((s) => s.previous?.sales || 0);
+  const prevProfit = sum((s) => s.previous?.profit || 0);
+  const anyPrevious = shops.some((s) => s.previous);
 
-  return { totalSales, totalProfit, byShop };
+  // Rank by sales among the shops that answered (1 = best).
+  const ranked = shops.filter((s) => s.available).sort((a, b) => b.sales - a.sales);
+  const rankOf = new Map(ranked.map((s, i) => [s.shopId, i + 1]));
+
+  const byShop = shops.map(({ _daily, ...s }) => ({
+    ...s,
+    // This shop's share of all four shops' sales, in %.
+    share: totalSales > 0 ? Math.round((s.sales / totalSales) * 1000) / 10 : 0,
+    rank: rankOf.get(s.shopId) ?? null,
+  }));
+
+  return {
+    range,
+    previousRange: prev,
+    totalSales,
+    totalProfit,
+    totalInvoices,
+    margin: marginPct(totalProfit, totalSales),
+    totalOutstanding: sum((s) => s.outstanding),
+    previous: anyPrevious ? { sales: prevSales, profit: prevProfit } : null,
+    change: anyPrevious
+      ? { sales: pctChange(totalSales, prevSales), profit: pctChange(totalProfit, prevProfit) }
+      : { sales: null, profit: null },
+    shopsAvailable: ranked.length,
+    byShop,
+    daily: combineDaily(shops),
+  };
 }

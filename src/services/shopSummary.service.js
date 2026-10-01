@@ -1,6 +1,7 @@
 import { SHOPS } from '../config/shops.js';
 import { fetchFromShop } from './shopClient.service.js';
 import { todayRange, monthToDateRange } from '../utils/dateRanges.js';
+import { salesNet, inventoryLowTotal } from './shopReportFields.js';
 
 /**
  * One shop's card data for the overview page. Never rejects: every call to
@@ -34,12 +35,9 @@ async function getShopSummary(shop) {
     // starts storing a logo URL in its own Settings.
     logoUrl: null,
     status: anySucceeded ? 'online' : 'offline',
-    todaySales: todayResult.status === 'fulfilled' ? todayResult.value.data.revenue : 0,
-    monthSales: monthResult.status === 'fulfilled' ? monthResult.value.data.revenue : 0,
-    lowStockCount:
-      inventoryResult.status === 'fulfilled'
-        ? inventoryResult.value.data.lowCount + inventoryResult.value.data.outCount
-        : 0,
+    todaySales: todayResult.status === 'fulfilled' ? salesNet(todayResult.value.data) : 0,
+    monthSales: monthResult.status === 'fulfilled' ? salesNet(monthResult.value.data) : 0,
+    lowStockCount: inventoryResult.status === 'fulfilled' ? inventoryLowTotal(inventoryResult.value.data) : 0,
   };
 }
 

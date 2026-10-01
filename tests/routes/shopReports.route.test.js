@@ -79,3 +79,60 @@ describe('GET /api/shops/:shopId/reports/:type', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('?compare=previous', () => {
+  it('returns the previous period of the same length and the % change of every figure', async () => {
+    getShopReport.mockImplementation((shop, type, params) =>
+      Promise.resolve(params.from === '2026-09-01'
+        ? { totalSales: 1200, count: 12, topProducts: [{ name: 'x' }] }
+        : { totalSales: 1000, count: 15, topProducts: [] }));
+
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/shops/shop1/reports/sales?from=2026-09-01&to=2026-09-30&compare=previous')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(getShopReport).toHaveBeenCalledWith(expect.anything(), 'sales', { from: '2026-08-02', to: '2026-08-31' });
+    expect(res.body.data).toMatchObject({
+      totalSales: 1200,
+      topProducts: [{ name: 'x' }],
+      previous: { totalSales: 1000, count: 15 },
+      change: { totalSales: 20, count: -20 },
+      previousRange: { from: '2026-08-02', to: '2026-08-31' },
+    });
+    expect(res.body.data.previous).not.toHaveProperty('topProducts');
+  });
+
+  it('does not compare report types that are not period-based (inventory)', async () => {
+    getShopReport.mockResolvedValue({ totalStockValue: 5 });
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/shops/shop1/reports/inventory?from=2026-09-01&to=2026-09-30&compare=previous')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(getShopReport).toHaveBeenCalledTimes(1);
+    expect(res.body.data).toEqual({ totalStockValue: 5 });
+  });
+
+  it('still answers with the current period if the previous one fails', async () => {
+    getShopReport
+      .mockResolvedValueOnce({ totalProfit: 10 })
+      .mockRejectedValueOnce(new Error('down'));
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/shops/shop1/reports/profit?from=2026-09-01&to=2026-09-07&compare=previous')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ totalProfit: 10 });
+  });
+
+  it('rejects an unknown compare mode', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/shops/shop1/reports/sales?from=2026-09-01&to=2026-09-07&compare=year')
+      .set('Authorization', `Bearer ${token}`);
+    expect(res.status).toBe(400);
+  });
+});

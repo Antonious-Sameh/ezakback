@@ -66,6 +66,22 @@ describe('GET /api/shops/:shopId/cashbox/summary', () => {
     expect(res.body.data.balance).toBe(500);
     expect(fetchFromShop).toHaveBeenCalledWith(expect.objectContaining({ id: 'shop1' }), '/cashbox/summary');
   });
+
+  it("returns an explicit shape from the shop's real answer (balance, today in / out / net)", async () => {
+    fetchFromShop.mockResolvedValue({ success: true, data: { balance: 3500, todayIn: 1200, todayOut: 300 } });
+    const app = createApp();
+
+    const res = await request(app).get('/api/shops/shop1/cashbox/summary').set('Authorization', `Bearer ${token}`);
+
+    expect(res.body.data).toEqual({ balance: 3500, todayIn: 1200, todayOut: 300, todayNet: 900 });
+  });
+
+  it('turns missing fields into 0, never undefined', async () => {
+    fetchFromShop.mockResolvedValue({ success: true, data: {} });
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/cashbox/summary').set('Authorization', `Bearer ${token}`);
+    expect(res.body.data).toEqual({ balance: 0, todayIn: 0, todayOut: 0, todayNet: 0 });
+  });
 });
 
 describe('GET /api/shops/:shopId/expenses/summary', () => {
@@ -76,7 +92,14 @@ describe('GET /api/shops/:shopId/expenses/summary', () => {
     const res = await request(app).get('/api/shops/shop1/expenses/summary').set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.data.monthTotal).toBe(900);
+    expect(res.body.data).toEqual({ todayTotal: 50, monthTotal: 900 });
+  });
+
+  it('turns missing fields into 0', async () => {
+    fetchFromShop.mockResolvedValue({ success: true, data: null });
+    const app = createApp();
+    const res = await request(app).get('/api/shops/shop1/expenses/summary').set('Authorization', `Bearer ${token}`);
+    expect(res.body.data).toEqual({ todayTotal: 0, monthTotal: 0 });
   });
 });
 

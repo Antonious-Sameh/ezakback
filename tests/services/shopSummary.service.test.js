@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fx from '../fixtures/shopResponses.js';
 
 vi.mock('../../src/config/shops.js', () => ({
   SHOPS: [
@@ -16,12 +17,20 @@ const { getAllShopsSummary } = await import('../../src/services/shopSummary.serv
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Freeze "now" mid-month: these tests tell "today" and "month to date"
+  // apart by their ranges, which are legitimately identical on the 1st.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-15T10:00:00Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('getAllShopsSummary', () => {
   it('builds a full summary when every call succeeds', async () => {
     fetchFromShop.mockImplementation((shop, path) => {
-      if (path === '/reports/sales') return Promise.resolve({ success: true, data: { revenue: 1000 } });
+      if (path === '/reports/sales') return Promise.resolve({ success: true, data: fx.salesReport({ netSales: 1000 }) });
       if (path === '/reports/inventory') {
         return Promise.resolve({ success: true, data: { lowCount: 2, outCount: 1 } });
       }
@@ -59,7 +68,7 @@ describe('getAllShopsSummary', () => {
       if (path === '/reports/inventory') return Promise.reject(new Error('timeout'));
       // today vs month both hit /reports/sales — distinguish by params.from === params.to
       const isToday = options?.params?.from === options?.params?.to;
-      return Promise.resolve({ success: true, data: { revenue: isToday ? 100 : 900 } });
+      return Promise.resolve({ success: true, data: fx.salesReport({ netSales: isToday ? 100 : 900 }) });
     });
 
     const [shop1] = await getAllShopsSummary();
@@ -73,7 +82,7 @@ describe('getAllShopsSummary', () => {
   it('queries every configured shop independently and in parallel', async () => {
     fetchFromShop.mockImplementation((shop, path) => {
       if (path === '/reports/inventory') return Promise.resolve({ success: true, data: { lowCount: 0, outCount: 0 } });
-      return Promise.resolve({ success: true, data: { revenue: shop.id === 'shop1' ? 10 : 20 } });
+      return Promise.resolve({ success: true, data: fx.salesReport({ netSales: shop.id === 'shop1' ? 10 : 20 }) });
     });
 
     const results = await getAllShopsSummary();

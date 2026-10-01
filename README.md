@@ -102,6 +102,13 @@ and response shape here was built to match `lib/api.js` and the pages that
 call it exactly (see each service file's comments for where a shape was
 double-checked against the actual frontend source).
 
+## Shop report field names
+
+All reads of the shops' report fields go through `src/services/shopReportFields.js`
+(e.g. sales = `netSales`, the figure AFTER returns). Tests use the shops' real
+response shapes from `tests/fixtures/shopResponses.js` — update that file first if
+a shop's report shape ever changes.
+
 ## Known gaps (carried over from the build stages, not yet decided)
 
 1. **Daily trend charts on the reports page** (`sales.byDay`, `profit.byDay`)
@@ -135,6 +142,8 @@ All under `/api`, all requiring `Authorization: Bearer <owner token>` except
 | `GET /shops/:shopId/expenses/summary` | That shop's expense totals |
 | `GET /shops/:shopId/reports/:type` | `type` ∈ sales / purchases / profit / inventory / customers / suppliers |
 | `GET /shops/:shopId/:entity` | `entity` ∈ products / customers / suppliers / sales / purchases / cashbox / expenses / activity — paginated list |
+| `GET /reports/compare?from&to` | Home analytics: totals, previous period (same length) and % change, per shop: sales / profit / invoices / margin / share / rank / what customers owe, plus the four shops' combined day series (`daily`, needs shop patch 2) |
+| `GET /shops/:shopId/reports/:type?compare=previous` | For `sales` / `profit` / `purchases`: adds `previous`, `change` (%) and `previousRange` |
 | `GET /shops/:shopId/settings` | Shop name/phone/address/invoice footer (whitelisted) — invoice header |
 | `GET /shops/:shopId/expenses/reasons` | Distinct expense reasons for the filter; `supported:false` if the shop isn't patched yet |
 | `GET /shops/:shopId/:entity/export` | Every row matching the list filters (paged through the shop 100 at a time, capped at 3,000) → `{ data, total, truncated, maxRows }` for CSV/Excel |

@@ -1,6 +1,7 @@
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { fetchFromShop } from '../services/shopClient.service.js';
 import { getShopOverview } from '../services/shopOverview.service.js';
+import { n } from '../services/shopReportFields.js';
 
 /** GET /api/shops/:shopId/overview */
 export const overview = asyncHandler(async (req, res) => {
@@ -9,19 +10,27 @@ export const overview = asyncHandler(async (req, res) => {
 });
 
 /**
- * GET /api/shops/:shopId/cashbox/summary and .../expenses/summary are thin,
- * direct proxies (unlike /overview, there's no reshaping to do — each
- * shop's own /admin/.../summary response is already exactly what the
- * frontend's cashbox/expenses section headers expect).
+ * GET /api/shops/:shopId/cashbox/summary and .../expenses/summary.
+ *
+ * These used to be blind pass-throughs, on the assumption that the shop's
+ * answer already matched the frontend. It didn't: the shops send
+ * { balance, todayIn, todayOut } and { todayTotal, monthTotal }, while the
+ * cards read totalIn / totalOut / total / thisMonth — so they showed 0.
+ * The shape is now spelled out here, explicitly.
  */
 export const cashboxSummary = asyncHandler(async (req, res) => {
-  const payload = await fetchFromShop(req.shop, '/cashbox/summary');
-  res.json({ success: true, data: payload.data });
+  const d = (await fetchFromShop(req.shop, '/cashbox/summary')).data || {};
+  const todayIn = n(d.todayIn);
+  const todayOut = n(d.todayOut);
+  res.json({
+    success: true,
+    data: { balance: n(d.balance), todayIn, todayOut, todayNet: Math.round((todayIn - todayOut) * 100) / 100 },
+  });
 });
 
 export const expensesSummary = asyncHandler(async (req, res) => {
-  const payload = await fetchFromShop(req.shop, '/expenses/summary');
-  res.json({ success: true, data: payload.data });
+  const d = (await fetchFromShop(req.shop, '/expenses/summary')).data || {};
+  res.json({ success: true, data: { todayTotal: n(d.todayTotal), monthTotal: n(d.monthTotal) } });
 });
 
 /**

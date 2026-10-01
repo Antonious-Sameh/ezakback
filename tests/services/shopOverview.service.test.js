@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fx from '../fixtures/shopResponses.js';
 
 vi.mock('../../src/services/shopClient.service.js', () => ({
   fetchFromShop: vi.fn(),
@@ -11,13 +12,21 @@ const shop = { id: 'shop1', name: 'المحل الأول', apiUrl: 'https://s1.e
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Freeze "now" mid-month: these tests tell "today" and "month to date"
+  // apart by their ranges, which are legitimately identical on the 1st.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-15T10:00:00Z'));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function mockAllSucceed() {
   fetchFromShop.mockImplementation((s, path, options) => {
     if (path === '/reports/sales') {
       const isToday = options?.params?.from === options?.params?.to;
-      return Promise.resolve({ success: true, data: { revenue: isToday ? 100 : 900, invoiceCount: isToday ? 3 : 20 } });
+      return Promise.resolve({ success: true, data: fx.salesReport({ netSales: isToday ? 100 : 900, invoiceCount: isToday ? 3 : 20 }) });
     }
     if (path === '/reports/profit') return Promise.resolve({ success: true, data: { net: 40 } });
     if (path === '/reports/inventory') {
@@ -75,3 +84,31 @@ describe('getShopOverview', () => {
     expect(result.lowStockItems).toEqual([]);
   });
 });
+
+describe('getShopOverview — regression: real shop shapes', () => {
+  it("reads today's / month's sales from netSales (they used to come out as 0)", async () => {
+    // Mid-month, so "today" and "month to date" are different ranges.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-15T10:00:00Z'));
+    fetchFromShop.mockImplementation((s, path, opts) => {
+      if (path === '/reports/sales') {
+        const isToday = opts.params.from === opts.params.to;
+        return Promise.resolve({ success: true, data: fx.salesReport({ netSales: isToday ? 750 : 12000, invoiceCount: isToday ? 9 : 150 }) });
+      }
+      if (path === '/reports/profit') return Promise.resolve({ success: true, data: fx.profitReport({ net: 210 }) });
+      if (path === '/reports/inventory') return Promise.resolve({ success: true, data: fx.inventoryReport() });
+      if (path === '/cashbox/summary') return Promise.resolve({ success: true, data: fx.cashboxSummary() });
+      if (path === '/reports/customers') return Promise.resolve({ success: true, data: fx.customersReport() });
+      return Promise.resolve({ success: true, data: [] });
+    });
+
+    const r = await getShopOverview(shop);
+
+    expect(r).toMatchObject({
+      todaySales: 750, todayOrders: 9, monthSales: 12000, todayProfit: 210,
+      cashboxBalance: 3500, productCount: 120, lowStockCount: 8, customerCount: 80,
+    });
+    vi.useRealTimers();
+  });
+});
+

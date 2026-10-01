@@ -1,5 +1,6 @@
 import { fetchFromShop } from './shopClient.service.js';
 import { todayRange, monthToDateRange } from '../utils/dateRanges.js';
+import { salesNet, salesCount, profitNet, inventoryLowTotal, n } from './shopReportFields.js';
 
 /**
  * Maps a shop's raw product document to the shape the overview page's
@@ -64,14 +65,14 @@ export async function getShopOverview(shop) {
     ]);
 
   return {
-    todaySales: todaySalesR?.data.revenue ?? 0,
-    todayOrders: todaySalesR?.data.invoiceCount ?? 0,
-    monthSales: monthSalesR?.data.revenue ?? 0,
-    todayProfit: todayProfitR?.data.net ?? 0,
-    cashboxBalance: cashboxR?.data.balance ?? 0,
-    productCount: inventoryR?.data.productsCount ?? 0,
-    lowStockCount: inventoryR ? inventoryR.data.lowCount + inventoryR.data.outCount : 0,
-    customerCount: customersR?.data.count ?? 0,
+    todaySales: todaySalesR ? salesNet(todaySalesR.data) : 0,
+    todayOrders: todaySalesR ? salesCount(todaySalesR.data) : 0,
+    monthSales: monthSalesR ? salesNet(monthSalesR.data) : 0,
+    todayProfit: todayProfitR ? profitNet(todayProfitR.data) : 0,
+    cashboxBalance: n(cashboxR?.data?.balance),
+    productCount: n(inventoryR?.data?.productsCount),
+    lowStockCount: inventoryR ? inventoryLowTotal(inventoryR.data) : 0,
+    customerCount: n(customersR?.data?.count),
     lowStockItems,
   };
 }
