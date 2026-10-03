@@ -9,7 +9,8 @@ import { previousRange, pctChange } from '../utils/dateRanges.js';
  *
  * Per shop (in parallel, each call allowed to fail on its own):
  *   sales + profit for the range, sales + profit for the previous range,
- *   what customers still owe (all-time), and the day-by-day series.
+ *   and the day-by-day series. (What customers owe / stock value / cash are
+ *   NOT range-bound and live in positionReport.service.js.)
  * A shop that doesn't answer is flagged `available: false` and counts as 0 —
  * one bad shop never blanks the other three.
  */
@@ -18,12 +19,11 @@ const settled = (p) => p.then((r) => r, () => null);
 const round2 = (v) => Math.round(v * 100) / 100;
 
 async function getShopCompare(shop, range, prev) {
-  const [sales, profit, prevSales, prevProfit, customers, daily] = await Promise.all([
+  const [sales, profit, prevSales, prevProfit, daily] = await Promise.all([
     settled(fetchFromShop(shop, '/reports/sales', { params: range })),
     settled(fetchFromShop(shop, '/reports/profit', { params: range })),
     settled(fetchFromShop(shop, '/reports/sales', { params: prev })),
     settled(fetchFromShop(shop, '/reports/profit', { params: prev })),
-    settled(fetchFromShop(shop, '/reports/customers', { params: { limit: 1 } })),
     // Needs shop patch 2 — absent on an older shop build, which is fine.
     settled(fetchFromShop(shop, '/reports/daily', { params: range })),
   ]);
@@ -49,8 +49,6 @@ async function getShopCompare(shop, range, prev) {
     change: hasPrevious
       ? { sales: pctChange(salesValue, prevSalesValue), profit: pctChange(profitValue, prevProfitValue) }
       : { sales: null, profit: null },
-    // What this shop's customers still owe it (all-time, not range-bound).
-    outstanding: customers ? n(customers.data?.totalOutstanding) : 0,
     _daily: daily?.data?.days || null,
   };
 }
@@ -106,7 +104,6 @@ export async function getCompareReport(range) {
     totalProfit,
     totalInvoices,
     margin: marginPct(totalProfit, totalSales),
-    totalOutstanding: sum((s) => s.outstanding),
     previous: anyPrevious ? { sales: prevSales, profit: prevProfit } : null,
     change: anyPrevious
       ? { sales: pctChange(totalSales, prevSales), profit: pctChange(totalProfit, prevProfit) }

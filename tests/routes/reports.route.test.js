@@ -4,8 +4,12 @@ import request from 'supertest';
 vi.mock('../../src/services/compareReport.service.js', () => ({
   getCompareReport: vi.fn(),
 }));
+vi.mock('../../src/services/positionReport.service.js', () => ({
+  getPositionReport: vi.fn(),
+}));
 
 const { getCompareReport } = await import('../../src/services/compareReport.service.js');
+const { getPositionReport } = await import('../../src/services/positionReport.service.js');
 const { createApp } = await import('../../src/app.js');
 const { signOwnerToken } = await import('../../src/config/jwt.js');
 
@@ -70,3 +74,23 @@ describe('GET /api/reports/compare', () => {
     expect(res.body.data.totalSales).toBe(3000);
   });
 });
+
+describe('GET /api/reports/position', () => {
+  it('requires authentication', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/reports/position');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns the position report (debts, stock, cash per shop and in total)', async () => {
+    getPositionReport.mockResolvedValue({ generatedAt: '2026-10-01T09:00:00.000Z', totals: { net: 100, complete: true }, byShop: [] });
+    const app = createApp();
+    const token = signOwnerToken();
+
+    const res = await request(app).get('/api/reports/position').set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { generatedAt: '2026-10-01T09:00:00.000Z', totals: { net: 100, complete: true }, byShop: [] } });
+  });
+});
+

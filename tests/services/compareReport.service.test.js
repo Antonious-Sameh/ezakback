@@ -39,7 +39,6 @@ function fakeShops(figures) {
       const net = isPrev ? f.prevProfit : f.profit;
       return Promise.resolve({ success: true, data: fx.profitReport({ net, netRevenue: isPrev ? f.prevSales : f.sales }) });
     }
-    if (path === '/reports/customers') return Promise.resolve({ success: true, data: fx.customersReport({ totalOutstanding: f.outstanding ?? 0 }) });
     if (path === '/reports/daily') {
       if (!f.daily) return Promise.reject(Object.assign(new Error('nf'), { status: 404 }));
       return Promise.resolve({ success: true, data: { days: f.daily } });
@@ -92,16 +91,6 @@ describe('getCompareReport (real shop shapes)', () => {
 
     expect(r.totalSales).toBe(10000);
     expect(r.byShop.every((s) => s.sales === 5000)).toBe(true);
-  });
-
-  it('adds up what customers owe across the shops', async () => {
-    fakeShops({
-      shop1: { sales: 1, profit: 0, prevSales: 1, prevProfit: 0, outstanding: 1200 },
-      shop2: { sales: 1, profit: 0, prevSales: 1, prevProfit: 0, outstanding: 800.5 },
-    });
-    const r = await getCompareReport(range);
-    expect(r.totalOutstanding).toBe(2000.5);
-    expect(r.byShop.map((s) => s.outstanding)).toEqual([1200, 800.5]);
   });
 
   it('combines the shops\' day series (sales after returns, net profit) and flags a partial series', async () => {

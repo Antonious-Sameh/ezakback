@@ -142,7 +142,8 @@ All under `/api`, all requiring `Authorization: Bearer <owner token>` except
 | `GET /shops/:shopId/expenses/summary` | That shop's expense totals |
 | `GET /shops/:shopId/reports/:type` | `type` ∈ sales / purchases / profit / inventory / customers / suppliers |
 | `GET /shops/:shopId/:entity` | `entity` ∈ products / customers / suppliers / sales / purchases / cashbox / expenses / activity — paginated list |
-| `GET /reports/compare?from&to` | Home analytics: totals, previous period (same length) and % change, per shop: sales / profit / invoices / margin / share / rank / what customers owe, plus the four shops' combined day series (`daily`, needs shop patch 2) |
+| `GET /reports/compare?from&to` | Home analytics: totals, previous period (same length) and % change, per shop: sales / profit / invoices / margin / share / rank, plus the four shops' combined day series (`daily`, needs shop patch 2) |
+| `GET /reports/position` | "معانا كام": per shop and in total — what customers owe, what we owe suppliers, drawer cash, stock at cost and at sale price, plus an estimate (cash + stock at cost + owed to us − owed by us). A figure a shop couldn't give is `null` (not 0) and `totals.complete` is false. Cached 60 s |
 | `GET /shops/:shopId/reports/:type?compare=previous` | For `sales` / `profit` / `purchases`: adds `previous`, `change` (%) and `previousRange` |
 | `GET /shops/:shopId/settings` | Shop name/phone/address/invoice footer (whitelisted) — invoice header |
 | `GET /shops/:shopId/expenses/reasons` | Distinct expense reasons for the filter; `supported:false` if the shop isn't patched yet |
